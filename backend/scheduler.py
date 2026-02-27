@@ -1,6 +1,6 @@
 """
-scheduler.py — APScheduler background job that runs every 30 min.
-Pulls data from all external APIs, updates county risk scores via Gemini.
+scheduler.py — APScheduler background job: pulls all 4 APIs every 30 min,
+updates risk scores for all 47 counties via Gemini.
 """
 import asyncio
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -17,7 +17,6 @@ _scheduler = BackgroundScheduler(timezone="Africa/Nairobi")
 
 
 def _run_async(coro):
-    """Helper to run async functions from sync APScheduler context."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -27,25 +26,29 @@ def _run_async(coro):
 
 
 async def _collect_and_analyse():
-    print(f"\n[Scheduler] ⏰ Data collection started — {datetime.now().strftime('%H:%M:%S')}")
+    now = datetime.now().strftime("%H:%M:%S")
+    print(f"\n[Scheduler] ⏰ Data collection started — {now}")
 
-    # 1. Fetch + score each county
     counties = await get_all_counties()
-    print(f"[Scheduler] Processing {len(counties)} counties...")
+    print(f"[Scheduler] Scoring {len(counties)} counties...")
 
-    for county in counties[:10]:  # First 10 to respect free-tier rate limits
+    # Score all counties — batch with small delay to respect API rate limits
+    for i, county in enumerate(counties):
         weather = await fetch_weather(county["name"], county["lat"], county["lng"])
         risk    = await score_county_risk(county["name"], weather)
         await update_county_risk(county["id"], risk.get("risk_score", 0))
+        if (i + 1) % 10 == 0:
+            print(f"[Scheduler]   {i+1}/{len(counties)} counties scored...")
+            await asyncio.sleep(1)  # brief pause every 10 to avoid rate limit
 
-    # 2. Fetch earthquakes → auto-insert new disasters
+    # ── Earthquakes (USGS — no key needed) ────────────────────────────────────
     quakes = await fetch_earthquakes()
-    for q in quakes[:5]:
-        # Only insert high/medium magnitude quakes not already recorded
+    new_quakes = 0
+    for q in quakes:
         if q["magnitude"] >= 3.5:
             existing = await fetchall(
-                "SELECT id FROM disasters WHERE type='Earthquake' AND lat=? AND lng=?",
-                (round(q["lat"], 2), round(q["lng"], 2))
+                "SELECT id FROM disasters WHERE type='Earthquake' AND ABS(lat-?)<=0.1 AND ABS(lng-?)<=0.1",
+                (q["lat"], q["lng"])
             )
             if not existing:
                 await insert_disaster({
@@ -55,34 +58,43 @@ async def _collect_and_analyse():
                     "lat":             q["lat"],
                     "lng":             q["lng"],
                     "affected_people": 0,
-                    "description":     f"M{q['magnitude']} earthquake at depth {q['depth_km']}km — {q['place']}",
+                    "description":     f"M{q['magnitude']} earthquake — depth {q['depth_km']}km. {q['place']}",
                     "source":          "usgs",
                     "status":          "active",
                 })
+                new_quakes += 1
+    if new_quakes:
+        print(f"[Scheduler] 🌎 {new_quakes} new earthquake(s) auto-logged")
 
-    # 3. Fetch wildfires → auto-insert if significant
+    # ── Wildfires (NASA FIRMS) ─────────────────────────────────────────────────
     fires = await fetch_wildfires()
     if fires:
-        print(f"[Scheduler] {len(fires)} wildfire hotspots detected")
-        # Group by proximity — simple check, insert one cluster entry
-        if len(fires) > 5:
-            fire = fires[0]
-            existing = await fetchall(
-                "SELECT id FROM disasters WHERE type='Wildfire' AND lat BETWEEN ? AND ?",
-                (fire["lat"] - 0.5, fire["lat"] + 0.5)
-            )
-            if not existing:
-                await insert_disaster({
-                    "type":            "Wildfire",
-                    "severity":        "High" if len(fires) > 20 else "Medium",
-                    "location":        "Northern Kenya",
-                    "lat":             fire["lat"],
-                    "lng":             fire["lng"],
-                    "affected_people": 0,
-                    "description":     f"{len(fires)} active fire hotspots detected via NASA FIRMS satellite.",
-                    "source":          "nasa_firms",
-                    "status":          "active",
-                })
+        print(f"[Scheduler] 🔥 {len(fires)} wildfire hotspot(s) from NASA FIRMS")
+        # Only log a cluster if >= 3 hotspots
+        if len(fires) >= 3:
+            # Group by rough 1° grid
+            clusters = {}
+            for f in fires:
+                key = (round(f["lat"]), round(f["lng"]))
+                clusters.setdefault(key, []).append(f)
+            for key, pts in clusters.items():
+                if len(pts) >= 3:
+                    existing = await fetchall(
+                        "SELECT id FROM disasters WHERE type='Wildfire' AND ABS(lat-?)<=1 AND ABS(lng-?)<=1 AND status='active'",
+                        (key[0], key[1])
+                    )
+                    if not existing:
+                        await insert_disaster({
+                            "type":            "Wildfire",
+                            "severity":        "High" if len(pts) >= 10 else "Medium",
+                            "location":        "Northern Kenya",
+                            "lat":             pts[0]["lat"],
+                            "lng":             pts[0]["lng"],
+                            "affected_people": 0,
+                            "description":     f"{len(pts)} active fire hotspots detected via NASA FIRMS VIIRS satellite.",
+                            "source":          "nasa_firms",
+                            "status":          "active",
+                        })
 
     print(f"[Scheduler] ✅ Cycle complete — {datetime.now().strftime('%H:%M:%S')}\n")
 
@@ -96,13 +108,12 @@ def start_scheduler():
         _job,
         trigger=IntervalTrigger(minutes=30),
         id="data_collection",
-        name="KDMS Data Collection",
+        name="KDMS Data Collection (All 47 Counties)",
         replace_existing=True,
     )
     _scheduler.start()
-    print("[Scheduler] ✅ Background scheduler started (every 30 min)")
-    # Run immediately on startup
-    _job()
+    print("[Scheduler] ✅ Started — runs every 30 min for all 47 counties")
+    _job()  # Run immediately on startup
 
 
 def stop_scheduler():

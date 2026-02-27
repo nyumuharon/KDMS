@@ -1,14 +1,15 @@
 """
 sms_service.py — Africa's Talking SMS integration for KDMS.
-Uses sandbox mode by default (no real SMS sent, no cost).
+Reads AFRICASTALKING_USERNAME from .env — set to your real username for live SMS,
+or leave as "sandbox" for free testing.
 """
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-AT_USERNAME = os.getenv("AFRICASTALKING_USERNAME", "sandbox")
-AT_API_KEY  = os.getenv("AFRICASTALKING_API_KEY", "")
+AT_USERNAME = os.getenv("AFRICASTALKING_USERNAME", "sandbox").strip()
+AT_API_KEY  = os.getenv("AFRICASTALKING_API_KEY", "").strip()
 
 
 def _get_sms_client():
@@ -26,12 +27,14 @@ def _get_sms_client():
 async def send_bulk_sms(phone_numbers: list[str], message: str) -> dict:
     """
     Send bulk SMS via Africa's Talking.
-    Returns: {sent: int, failed: int, sandbox: bool}
+    - Sandbox (AFRICASTALKING_USERNAME=sandbox): free, no real SMS sent
+    - Production (real username): real SMS at ~KES 0.80/msg
+    Returns: {sent, failed, sandbox, mock}
     """
     if not phone_numbers:
         return {"sent": 0, "failed": 0, "sandbox": True, "error": "No recipients"}
 
-    # Ensure numbers are in E.164 format (+254...)
+    # Normalise to E.164 (+254...)
     formatted = []
     for num in phone_numbers:
         n = num.strip().replace(" ", "")
@@ -39,21 +42,27 @@ async def send_bulk_sms(phone_numbers: list[str], message: str) -> dict:
             n = "+254" + n[1:]
         elif n.startswith("254") and not n.startswith("+"):
             n = "+" + n
-        formatted.append(n)
+        if n:
+            formatted.append(n)
 
     sms = _get_sms_client()
     if not sms:
-        print(f"[SMS] MOCK — Would send to {len(formatted)} numbers: {message[:60]}...")
+        # No API key configured — log and return mock result
+        print(f"[SMS] No API key — logged {len(formatted)} messages (not sent)")
         return {"sent": len(formatted), "failed": 0, "sandbox": True, "mock": True}
 
     try:
         resp = sms.send(message, formatted, sender_id="NDMA-KE")
-        sent   = sum(1 for r in resp.get("SMSMessageData", {}).get("Recipients", []) if r.get("status") == "Success")
+        recipients = resp.get("SMSMessageData", {}).get("Recipients", [])
+        sent   = sum(1 for r in recipients if r.get("status") == "Success")
         failed = len(formatted) - sent
+        is_sandbox = AT_USERNAME == "sandbox"
+        print(f"[SMS] {'Sandbox' if is_sandbox else 'LIVE'} — sent={sent}, failed={failed}")
         return {
             "sent":    sent,
             "failed":  failed,
-            "sandbox": AT_USERNAME == "sandbox",
+            "sandbox": is_sandbox,
+            "live":    not is_sandbox,
         }
     except Exception as e:
         print(f"[SMS] Send error: {e}")

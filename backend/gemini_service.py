@@ -1,43 +1,74 @@
 """
-gemini_service.py — Production Gemini 1.5 Flash AI service for KDMS.
-All 4 jobs: risk scoring, 72hr prediction, SMS generation, national SitRep.
+gemini_service.py — Production Gemini AI service for KDMS.
+Only Job 5 (Chatbot) actively calls Gemini; all other jobs use local fallbacks.
 """
 import os
 import json
 import re
 import asyncio
+import random
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from dotenv import load_dotenv, dotenv_values
+from typing import Any, Dict, List
+from itertools import islice
+from datetime import datetime
+from dotenv import load_dotenv  # type: ignore[import]
 
-load_dotenv(override=True)
-_env_vars = dotenv_values(".env")
+# Load .env from the same directory as this file, regardless of working directory
+_here = Path(__file__).parent
+load_dotenv(dotenv_path=_here.parent / ".env", override=True)
 
-# Gemini 1.5 Flash - loaded on module initialization
-GEMINI_KEY = _env_vars.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY", "")
-GEMINI_KEY = GEMINI_KEY.strip()
+# Read key from environment after loading
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 _model = None
+_current_key: str = ""
 _executor = ThreadPoolExecutor(max_workers=4)
 
 
 def _init_model():
-    global _model
-    if _model is None and GEMINI_KEY:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_KEY)
+    global _model, _current_key
+    # Re-read the key fresh every call so .env changes take effect on restart
+    from pathlib import Path as _Path
+    from dotenv import load_dotenv as _load  # type: ignore[import]
+    _load(dotenv_path=_Path(__file__).parent.parent / ".env", override=True)
+    key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not key:
+        return None
+    # Reset model if key has changed
+    if key != _current_key:
+        _model = None
+        _current_key = key
+    if _model is None:
+        import google.generativeai as genai  # type: ignore[import]
+        genai.configure(api_key=key)
         _model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-2.5-flash",
             generation_config={"temperature": 0.3, "max_output_tokens": 1024},
         )
+        safe_key = "".join(list(islice(key, max(0, len(key)-6), len(key)))) if len(key) >= 6 else "INV"
+        print(f"[Gemini] Model initialised with key ...{safe_key}")
     return _model
 
 
-def _extract_json(text: str):
+def _extract_json(text: str) -> Any:
     """Strip markdown fences and parse JSON."""
-    text = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
+    # Find JSON block if it exists
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if match:
+        text = match.group(1)
+    else:
+        text = text.strip()
+    
     # Handle trailing commas
     text = re.sub(r",\s*([}\]])", r"\1", text)
-    return json.loads(text)
+    
+    try:
+        return json.loads(text)
+    except Exception as e:
+        print(f"[Gemini] JSON Parse Error: {e}\nRaw Text:\n{text}")
+        # Return fallback empty structure depending on expected type
+        return [] if text.startswith("[") else {}
 
 
 async def _generate(prompt: str) -> str:
@@ -46,136 +77,102 @@ async def _generate(prompt: str) -> str:
     if not model:
         raise RuntimeError("Gemini API key not configured")
     loop = asyncio.get_event_loop()
-    last_ex = None
-    wait_times = [5, 15, 30]  # Progressive backoff for free-tier RPM limits
-    for attempt in range(3):
-        try:
-            resp = await loop.run_in_executor(_executor, model.generate_content, prompt)
-            return resp.text
-        except Exception as e:
-            last_ex = e
-            if "429" in str(e) or "quota" in str(e).lower() or "rate" in str(e).lower():
-                wait = wait_times[attempt]
-                print(f"[Gemini] Rate limited. Waiting {wait}s before retry {attempt+1}/3...")
-                await asyncio.sleep(wait)
-            else:
-                raise  # Non-retriable error, fail immediately
-    raise last_ex  # All retries exhausted
+    try:
+        resp = await loop.run_in_executor(_executor, model.generate_content, prompt)
+        return resp.text
+    except Exception as e:
+        err = str(e)
+        if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+            # Quick wait for a single retry if hit by an automated background task
+            await asyncio.sleep(5)
+            try:
+                resp = await loop.run_in_executor(_executor, model.generate_content, prompt)
+                return resp.text
+            except Exception as e2:
+                # If it fails again, bubble it up to the caller to handle (or fail gracefully)
+                raise e2
+        raise e
 
 
 # ── Job 1: County Risk Scoring ───────────────────────────────────────────────
 
-async def score_county_risk(county: str, weather: dict) -> dict:
+async def score_county_risk(county: str, weather: Dict[str, Any]) -> Dict[str, Any]:
     """
     Analyse weather data and output a structured risk score for a county.
     Returns: {risk_score, disaster_type, confidence, reasoning}
     """
-    try:
-        prompt = f"""You are a disaster risk analyst for Kenya's National Disaster Management Authority (NDMA).
+    # Force use of fallback algorithm for all 47 counties to prevent 
+    # exhausting the free-tier Gemini API quota (15 RPM limits), 
+    # reserving the quota solely for the Chatbot and SMS generator.
+    return _fallback_risk(county, weather)
 
-Analyse the following real-time weather data for **{county}** county and provide a precise risk assessment.
-
-Weather Data:
-{json.dumps(weather, indent=2)}
-
-Context for Kenya risk assessment:
-- Rainfall > 30mm/hr = extreme flood risk in low-lying counties (Tana River, Garissa, Budalang'i)
-- Temperature > 38°C + humidity < 20% = wildfire risk (Turkana, Marsabit, Samburu)
-- Strong winds > 20km/h in highland counties = landslide risk if combined with rain
-- Consecutive dry days in northern counties = drought escalation
-
-Respond with ONLY valid JSON (no markdown, no explanation):
-{{
-  "risk_score": <integer 0-100>,
-  "disaster_type": "<Flood|Drought|Wildfire|Earthquake|Landslide|None>",
-  "confidence": "<High|Medium|Low>",
-  "reasoning": "<one precise sentence citing specific data values>"
-}}"""
-        text = await _generate(prompt)
-        result = _extract_json(text)
-        result["risk_score"] = max(0, min(100, int(result.get("risk_score", 0))))
-        return result
-    except Exception as e:
-        print(f"[Gemini] Risk scoring fallback for {county}: {e}")
-        return _fallback_risk(county, weather)
-
-
-def _fallback_risk(county: str, weather: dict) -> dict:
-    import random
-    rainfall = weather.get("rainfall_mm", 0)
-    temp = weather.get("temp_c", 25)
-    score = min(100, int(rainfall * 2.5 + max(0, temp - 32) * 1.5 + random.randint(0, 15)))
+def _fallback_risk(county: str, weather: Dict[str, Any]) -> Dict[str, Any]:
+    rainfall: float = float(weather.get("rainfall_mm", 0))
+    temp: float = float(weather.get("temp_c", 25))
+    score = min(100, int(rainfall * 2.5 + max(0, int(temp) - 32) * 1.5 + random.randint(0, 15)))
     dtype = "Flood" if rainfall > 20 else "Drought" if temp > 36 and rainfall < 2 else "None"
     return {
         "risk_score":    score,
         "disaster_type": dtype,
         "confidence":    "Low",
-        "reasoning":     f"Auto-calculated from rainfall={rainfall:.1f}mm, temp={temp:.1f}°C (Gemini unavailable).",
+        "reasoning":     f"Auto-calculated from rainfall={rainfall:.1f}mm, temp={temp:.1f}°C (Gemini bypassing rate limits).",
     }
 
 
 # ── Job 2: 72hr Predictive Warning ───────────────────────────────────────────
 
-async def generate_72hr_prediction(county_forecasts: list[dict]) -> list[dict]:
+async def generate_72hr_prediction(county_forecasts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Analyse 7-day forecasts and return counties at risk within 72 hours.
     Returns: [{county, threat, probability, estimated_time, recommended_action}]
     """
-    try:
-        # Summarise forecasts to fit context window
-        summaries = []
-        for fc in county_forecasts[:20]:
-            daily = fc.get("forecast", {})
-            precip = daily.get("precipitation_sum", [])
-            temp_max = daily.get("temperature_2m_max", [])
-            summaries.append({
+    # Force use of fallback algorithm to prevent exhausting the free-tier 
+    # Gemini API quota (15 RPM limits), reserving the quota solely for the Chatbot.
+    return _fallback_prediction(county_forecasts)
+
+def _fallback_prediction(county_forecasts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    predictions: List[Dict[str, Any]] = []
+    forecasts_slice = list(islice(county_forecasts, 20))
+    for fc in forecasts_slice:
+        daily: Dict[str, Any] = fc.get("forecast", {})
+        precip_raw = daily.get("precipitation_sum", [])
+        temp_raw = daily.get("temperature_2m_max", [])
+        precip: List[float] = [float(x) for x in precip_raw]
+        temp_max: List[float] = [float(x) for x in temp_raw]
+
+        precip_3d = list(islice(precip, 3))
+        temp_3d = list(islice(temp_max, 3))
+        rainfall_3d: float = sum(precip_3d) if precip_3d else 0.0
+        max_temp: float = max(temp_3d) if temp_3d else 25.0
+
+        if rainfall_3d > 25:
+            predictions.append({
                 "county": fc["county"],
-                "region": fc.get("region"),
-                "next_3day_rainfall_mm": sum(precip[:3]) if precip else None,
-                "max_temp_3day": max(temp_max[:3]) if temp_max else None,
+                "threat": "Flood",
+                "probability": "High" if rainfall_3d > 50 else "Medium",
+                "estimated_time": "within 48hrs",
+                "recommended_action": "Issue advanced flood warning to riverine communities."
             })
-
-        prompt = f"""You are the AI prediction engine for Kenya's NDMA Early Warning System.
-
-Analyse the 72-hour weather outlook for Kenya counties below and identify credible disaster threats.
-Only flag counties where threat probability is Medium or higher based on the data.
-
-Forecast summaries (next 3 days):
-{json.dumps(summaries, indent=2)}
-
-Risk thresholds:
-- Flood: >50mm cumulative rainfall in 3 days → High risk; >25mm → Medium risk
-- Drought: <5mm over 3 days AND max_temp > 35°C in arid north → Medium+
-- Landslide: >40mm in highland county (Elgeyo-Marakwet, Kericho, Nyeri, Murang'a) → High
-
-Respond with ONLY a valid JSON array (no markdown):
-[
-  {{
-    "county": "<county name>",
-    "threat": "<Flood|Drought|Wildfire|Landslide|Storm>",
-    "probability": "<High|Medium|Low>",
-    "estimated_time": "<within 24hrs|within 48hrs|within 72hrs>",
-    "recommended_action": "<specific NDMA pre-emptive action, 10-15 words>"
-  }}
-]
-Return [] if no credible threats found."""
-        text = await _generate(prompt)
-        return _extract_json(text)
-    except Exception as e:
-        print(f"[Gemini] 72hr prediction fallback: {e}")
-        return []
+        elif max_temp > 35 and rainfall_3d < 2:
+            predictions.append({
+                "county": fc["county"],
+                "threat": "Drought",
+                "probability": "Medium",
+                "estimated_time": "within 72hrs",
+                "recommended_action": "Monitor water sources and escalate tracking."
+            })
+    return predictions
 
 
 # ── Job 3: SMS Alert Generation ───────────────────────────────────────────────
 
-async def generate_sms_alert(disaster: dict, refuges: list[dict]) -> dict:
+async def generate_sms_alert(disaster: Dict[str, Any], refuges: List[Dict[str, Any]]) -> Dict[str, str]:
     """
     Generate bilingual SMS alert (English + Swahili), strictly under 160 chars each.
     Returns: {english, swahili}
     """
-    try:
-        refuge_names = ", ".join(r["name"] for r in refuges[:2]) if refuges else "nearest county offices"
-        prompt = f"""You are the Kenya NDMA emergency communications system.
+    refuge_names = ", ".join(r["name"] for r in islice(refuges, 2)) if refuges else "nearest county offices"
+    prompt = f"""You are the Kenya NDMA emergency communications system.
 
 Write two SMS alerts for a disaster event — one English, one Swahili.
 STRICT REQUIREMENT: Each message must be under 160 characters including spaces.
@@ -191,40 +188,27 @@ Disaster:
 
 Respond with ONLY valid JSON (no markdown):
 {{"english": "<message under 160 chars>", "swahili": "<message under 160 chars>"}}"""
-        text = await _generate(prompt)
-        result = _extract_json(text)
-        # Enforce 160-char hard cap
-        for lang in ("english", "swahili"):
-            if len(result.get(lang, "")) > 160:
-                result[lang] = result[lang][:157] + "..."
-        return result
-    except Exception as e:
-        print(f"[Gemini] SMS alert fallback: {e}")
-        return _fallback_sms(disaster)
-
-
-def _fallback_sms(disaster: dict) -> dict:
-    county = disaster.get("county_name") or disaster.get("location", "your area")
-    dtype  = disaster.get("type", "disaster")
-    return {
-        "english": f"NDMA ALERT: {dtype} warning in {county}. Evacuate to nearest refuge immediately. Call 1199.",
-        "swahili": f"TAHADHARI: {dtype} katika {county}. Nenda kituo cha wakimbizi. Piga simu 1199.",
-    }
+    text = await _generate(prompt)
+    result = _extract_json(text)
+    # Enforce 160-char hard cap
+    for lang in ("english", "swahili"):
+        if len(result.get(lang, "")) > 160:
+            result[lang] = result[lang][:157] + "..."
+    return result
 
 
 # ── Job 4: National Situation Report ─────────────────────────────────────────
 
-async def generate_national_report(disasters: list[dict], stats: dict) -> str:
+async def generate_national_report(disasters: List[Dict[str, Any]], stats: Dict[str, Any]) -> str:
     """
     Generate a professional NDMA national situation report in markdown.
     Returns: formatted markdown string.
     """
-    try:
-        active = [d for d in disasters if d.get("status") == "active"]
-        prompt = f"""You are the NDMA Kenya National Operations Centre AI system.
+    active = [d for d in disasters if d.get("status") == "active"]
+    prompt = f"""You are the NDMA Kenya National Operations Centre AI system.
 Generate a formal Situation Report (SitRep) for senior NDMA officers and Cabinet Secretary.
 
-Date: {__import__('datetime').datetime.utcnow().strftime('%d %B %Y, %H:%M UTC')}
+Date: {datetime.utcnow().strftime('%d %B %Y, %H:%M UTC')}
 
 Current National Status:
 - Active disaster incidents: {stats.get('active_disasters')}
@@ -234,7 +218,7 @@ Current National Status:
 - Field workers available for deployment: {stats.get('available_workers')}
 
 Active Incidents:
-{json.dumps(active[:10], indent=2)}
+{json.dumps(list(islice(active, 10)), indent=2)}
 
 Write a professional markdown SitRep with these exact sections:
 ## Executive Summary
@@ -244,51 +228,11 @@ Write a professional markdown SitRep with these exact sections:
 ## 72-Hour Outlook
 
 Use ## headers. Be concise, factual, and action-oriented. Do not use placeholder text."""
-        return await _generate(prompt)
-    except Exception as e:
-        print(f"[Gemini] National report fallback: {e}")
-        return _fallback_report(disasters, stats)
-
-
-def _fallback_report(disasters: list, stats: dict) -> str:
-    from datetime import datetime
-    active = [d for d in disasters if d.get("status") == "active"]
-    rows = "\n".join(
-        f"| {d.get('county_name','—')} | {d.get('type','—')} | {d.get('severity','—')} | {d.get('affected_people',0):,} |"
-        for d in active[:8]
-    )
-    return f"""## NDMA Kenya — National Situation Report
-*{datetime.utcnow().strftime('%d %B %Y, %H:%M UTC')} — Auto-generated (Gemini offline)*
-
-## Executive Summary
-**{stats.get('active_disasters', len(active))} active disaster incidents** are ongoing across Kenya counties,
-with an estimated **{stats.get('total_affected', 0):,} people affected**. {stats.get('deployed_workers', 0)} field
-workers are currently deployed. {stats.get('high_risk_counties', 0)} counties are at elevated risk (score ≥70).
-
-## Active Incidents
-
-| County | Type | Severity | Affected |
-|--------|------|----------|----------|
-{rows}
-
-## Resource & Personnel Status
-- **Deployed:** {stats.get('deployed_workers', 0)} workers active in the field
-- **Available:** {stats.get('available_workers', 0)} workers ready for immediate deployment
-- **High-Risk Counties:** {stats.get('high_risk_counties', 0)} counties require priority monitoring
-
-## Priority Actions (next 24 hours)
-- Pre-position relief supplies in counties with risk score ≥ 80
-- Activate water trucking for drought-affected northern counties
-- Coordinate with Kenya Red Cross for medical supply replenishment
-- Issue public advisories for flood-prone riverine communities
-
-## 72-Hour Outlook
-Continued monitoring of all 47 counties via automated data collection (every 30 minutes).
-Connect Gemini API key for AI-powered predictive analysis and real-time threat assessment."""
+    return await _generate(prompt)
 
 # ── Job 5: Administrator Support Chatbot ─────────────────────────────────────
 
-async def get_admin_chat_response(messages: list[dict], stats: dict) -> str:
+async def get_admin_chat_response(messages: List[Dict[str, Any]], stats: Dict[str, Any]) -> str:
     """
     Provide context-aware support for system administrators.
     messages format: [{"role": "user"|"assistant", "content": "..."}]
@@ -314,4 +258,6 @@ Respond to the final USER message as the KDMS assistant. Be helpful, concise, an
         return await _generate(prompt)
     except Exception as e:
         print(f"[Gemini] Chatbot fallback: {e}")
-        return "I am currently running in offline mode. Please verify the Gemini API key in the `.env` file to enable full chat support."
+        if "429" in str(e) or "quota" in str(e).lower():
+            return "⚠️ **Gemini API Rate Limit Exceeded:** The free tier key provided (15 Requests/Min) has been exhausted. Please wait a few minutes for the quota to reset, or upgrade your Google AI Studio plan to continue using the Chatbot."
+        return f"⚠️ **Connection Error:** Backend could not reach Gemini API ({str(e)})."

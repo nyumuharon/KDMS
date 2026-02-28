@@ -1,10 +1,11 @@
 """
 database.py — SQLite setup and async query helpers for KDMS
 """
-import aiosqlite
+import aiosqlite  # type: ignore[import]
 import json
 import os
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "kdms.db")
 
@@ -88,27 +89,33 @@ async def init_db():
 
 # ── Generic helpers ──────────────────────────────────────────────────────────
 
-async def fetchall(query: str, params: tuple = ()):
+async def fetchall(query: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(query, params) as cur:
             rows = await cur.fetchall()
-            return [dict(r) for r in rows]
+            result = [dict(r) for r in rows]
+    return result
 
 
-async def fetchone(query: str, params: tuple = ()):
+async def fetchone(query: str, params: Tuple[Any, ...] = ()) -> Optional[Dict[str, Any]]:
+    row_result: Optional[Dict[str, Any]] = None
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(query, params) as cur:
             row = await cur.fetchone()
-            return dict(row) if row else None
+            row_result = dict(row) if row else None
+    return row_result
 
 
-async def execute(query: str, params: tuple = ()):
+async def execute(query: str, params: Tuple[Any, ...] = ()) -> Optional[int]:
+    last_id: Optional[int] = None
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(query, params)
         await db.commit()
-        return cur.lastrowid
+        last_id = cur.lastrowid
+    return last_id
 
 
 # ── County helpers ───────────────────────────────────────────────────────────
@@ -126,20 +133,22 @@ async def update_county_risk(county_id: int, risk_score: int):
 
 # ── Disaster helpers ─────────────────────────────────────────────────────────
 
-async def get_all_disasters(status: str = None):
+async def get_all_disasters(status: Optional[str] = None) -> List[Dict[str, Any]]:
     if status:
-        return await fetchall(
+        result: List[Dict[str, Any]] = await fetchall(
             "SELECT d.*, c.name as county_name FROM disasters d "
             "LEFT JOIN counties c ON d.county_id=c.id WHERE d.status=? ORDER BY reported_at DESC",
             (status,)
         )
-    return await fetchall(
-        "SELECT d.*, c.name as county_name FROM disasters d "
-        "LEFT JOIN counties c ON d.county_id=c.id ORDER BY reported_at DESC"
-    )
+    else:
+        result = await fetchall(
+            "SELECT d.*, c.name as county_name FROM disasters d "
+            "LEFT JOIN counties c ON d.county_id=c.id ORDER BY reported_at DESC"
+        )
+    return result
 
 
-async def insert_disaster(data: dict) -> int:
+async def insert_disaster(data: Dict[str, Any]) -> Optional[int]:
     return await execute(
         """INSERT INTO disasters (type, severity, county_id, location, lat, lng,
            affected_people, description, source, status)
@@ -200,7 +209,7 @@ async def get_cached(key: str):
     return None
 
 
-async def set_cached(key: str, data):
+async def set_cached(key: str, data: Any) -> None:
     await execute(
         """INSERT INTO ai_cache (cache_key, analysis_json) VALUES (?,?)
            ON CONFLICT(cache_key) DO UPDATE SET analysis_json=excluded.analysis_json,

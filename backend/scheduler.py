@@ -110,10 +110,10 @@ def start_scheduler():
         id="data_collection",
         name="KDMS Data Collection (All 47 Counties)",
         replace_existing=True,
+        next_run_time=datetime.now()
     )
     _scheduler.start()
     print("[Scheduler] ✅ Started — runs every 30 min for all 47 counties")
-    _job()  # Run immediately on startup
 
 
 def stop_scheduler():

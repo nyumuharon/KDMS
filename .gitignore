@@ -38,3 +38,5 @@ Thumbs.db
 backend/test_gemini.py
 backend/test_gemini2.py
 backend/error_log.txt
+
+*.zip

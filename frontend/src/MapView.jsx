@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap, GeoJSON } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import 'leaflet.heat'
 
 const SEVERITY_COLOR = {
     High: '#ef4444',
@@ -37,42 +36,25 @@ function FitBounds({ disasters }) {
     return null
 }
 
-function HeatmapLayer({ disasters }) {
-    const map = useMap()
-    useEffect(() => {
-        if (!disasters.length) return
-
-        // Intensity mapping based on severity
-        const points = disasters
-            .filter(d => d.lat && d.lng)
-            .map(d => {
-                const intensity = d.severity === 'High' ? 1.0 : d.severity === 'Medium' ? 0.6 : 0.3
-                return [d.lat, d.lng, intensity]
-            })
-
-        const heat = L.heatLayer(points, {
-            radius: 35,
-            blur: 25,
-            maxZoom: 9,
-            gradient: { 0.2: '#10b981', 0.6: '#f59e0b', 1.0: '#ef4444' } // matches Low, Med, High colors
-        }).addTo(map)
-
-        return () => { map.removeLayer(heat) }
-    }, [map, disasters])
-    return null
-}
-
 export default function MapView({ api }) {
     const [disasters, setDisasters] = useState([])
     const [selected, setSelected] = useState(null)
     const [loading, setLoading] = useState(true)
     const [toast, setToast] = useState(null)
+    const [geoData, setGeoData] = useState(null)
 
     useEffect(() => {
+        // Fetch official Kenya counties GeoJSON
+        fetch('/counties.geojson')
+            .then(r => r.json())
+            .then(data => setGeoData(data))
+            .catch(e => console.error('Failed to load county paths', e))
+
         fetch(`${api}/disasters?status=active`)
             .then(r => r.json())
             .then(data => { setDisasters(data); setLoading(false) })
             .catch(() => setLoading(false))
+
         const t = setInterval(() =>
             fetch(`${api}/disasters?status=active`)
                 .then(r => r.json())
@@ -80,6 +62,37 @@ export default function MapView({ api }) {
                 .catch(() => { }), 60000)
         return () => clearInterval(t)
     }, [api])
+
+    // Match geometric counties to disasters
+    const getCountyStyle = (feature) => {
+        const countyName = feature.properties.ADM1_EN // HDX OCHA property for Admin 1 (County)
+
+        // Find if this county has an active disaster
+        // We do a loose string match because API county names might differ slightly from GeoJSON bounds
+        const activeDisaster = disasters.find(d =>
+            d.county_name && countyName &&
+            (d.county_name.toLowerCase().includes(countyName.toLowerCase()) ||
+                countyName.toLowerCase().includes(d.county_name.toLowerCase()))
+        )
+
+        if (activeDisaster) {
+            return {
+                fillColor: SEVERITY_COLOR[activeDisaster.severity] || '#f59e0b',
+                weight: 1,
+                opacity: 0.8,
+                color: SEVERITY_COLOR[activeDisaster.severity] || '#f59e0b',
+                fillOpacity: activeDisaster.severity === 'High' ? 0.35 : 0.2
+            }
+        }
+
+        // Default invisible style for unaffected counties
+        return {
+            fillColor: 'transparent',
+            weight: 0,
+            opacity: 0,
+            fillOpacity: 0
+        }
+    }
 
     const showToast = (msg, type = 'success') => {
         setToast({ msg, type })
@@ -123,7 +136,15 @@ export default function MapView({ api }) {
                         attribution='&copy; <a href="https://carto.com/">CARTO</a>'
                     />
 
-                    <HeatmapLayer disasters={disasters} />
+                    {/* Full-county Heatmap Fill */}
+                    {geoData && (
+                        <GeoJSON
+                            data={geoData}
+                            style={getCountyStyle}
+                            // Re-render when disasters change to update colors
+                            key={JSON.stringify(disasters.map(d => d.id))}
+                        />
+                    )}
 
                     {disasters.filter(d => d.lat && d.lng).map(d => (
                         <CircleMarker

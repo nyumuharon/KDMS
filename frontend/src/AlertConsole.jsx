@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Smartphone, MapPin, Zap, Users, Send, FileText, CheckCircle2, History, RefreshCcw } from 'lucide-react'
 
 export default function AlertConsole({ api }) {
     const [disasters, setDisasters] = useState([])
@@ -51,7 +52,9 @@ export default function AlertConsole({ api }) {
             <div className="grid-2" style={{ gap: 20 }}>
                 {/* Left: composer */}
                 <div className="card" style={{ padding: 24 }}>
-                    <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 20 }}>📱 Compose Alert</div>
+                    <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Smartphone size={20} color="var(--accent-primary)" /> Compose Alert
+                    </div>
 
                     <div className="form-group">
                         <label>Select Disaster</label>
@@ -78,12 +81,12 @@ export default function AlertConsole({ api }) {
                         }}>
                             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>DISASTER DETAILS</div>
                             <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                                <div>📍 <b>{selectedDisaster.location}</b></div>
-                                <div>⚡ Severity: <span style={{
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><MapPin size={14} color="var(--text-muted)" /> <b>{selectedDisaster.location}</b></div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Zap size={14} color="var(--text-muted)" /> Severity: <span style={{
                                     color: selectedDisaster.severity === 'High' ? 'var(--accent-red)' :
                                         selectedDisaster.severity === 'Medium' ? 'var(--accent-amber)' : 'var(--accent-green)'
                                 }}>{selectedDisaster.severity}</span></div>
-                                <div>👥 Affected: {(selectedDisaster.affected_people || 0).toLocaleString()}</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Users size={14} color="var(--text-muted)" /> Affected: {(selectedDisaster.affected_people || 0).toLocaleString()}</div>
                             </div>
                         </div>
                     )}
@@ -91,11 +94,11 @@ export default function AlertConsole({ api }) {
                     <button
                         id="send-alert-btn"
                         className="btn btn-primary"
-                        style={{ width: '100%', justifyContent: 'center', padding: '11px' }}
+                        style={{ width: '100%', justifyContent: 'center', padding: '11px', display: 'flex', gap: 8, alignItems: 'center' }}
                         disabled={!disId || generating}
                         onClick={generatePreview}
                     >
-                        {generating ? '⏳ Generating AI alert…' : '🤖 Generate & Send AI Alert'}
+                        {generating ? '⏳ Generating AI alert…' : <><Send size={16} /> Generate & Send AI Alert</>}
                     </button>
 
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, textAlign: 'center' }}>
@@ -105,11 +108,13 @@ export default function AlertConsole({ api }) {
 
                 {/* Right: preview */}
                 <div className="card" style={{ padding: 24 }}>
-                    <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>📋 Alert Preview</div>
+                    <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <FileText size={20} color="var(--accent-primary)" /> Alert Preview
+                    </div>
 
                     {!preview ? (
-                        <div className="empty-state">
-                            <div className="icon">📨</div>
+                        <div className="empty-state" style={{ padding: '60px 20px' }}>
+                            <div className="icon" style={{ marginBottom: 16 }}><Send size={48} color="rgba(255,255,255,0.1)" /></div>
                             <p>Select a disaster and click "Generate" to preview the AI-crafted alert</p>
                         </div>
                     ) : (
@@ -138,10 +143,9 @@ export default function AlertConsole({ api }) {
                                 display: 'flex', alignItems: 'center', gap: 8,
                                 padding: '10px 14px',
                                 background: 'rgba(16,185,129,0.1)',
-                                border: '1px solid rgba(16,185,129,0.25)',
                                 borderRadius: 8, fontSize: 13,
                             }}>
-                                <span>✅</span>
+                                <CheckCircle2 size={16} color="var(--accent-green)" />
                                 <span style={{ color: 'var(--accent-green)' }}>
                                     Sent to <b>{preview.recipients}</b> recipient{preview.recipients !== 1 ? 's' : ''}
                                 </span>
@@ -154,13 +158,13 @@ export default function AlertConsole({ api }) {
             {/* Past alerts */}
             <div className="card" style={{ marginTop: 24 }}>
                 <div className="card-header">
-                    <h2>📜 Alert History</h2>
+                    <h2 style={{ display: 'flex', alignItems: 'center', gap: 8 }}><History size={18} color="var(--text-secondary)" /> Alert History</h2>
                     <button
                         className="btn btn-sm"
-                        style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)' }}
+                        style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}
                         onClick={() => fetch(`${api}/alerts`).then(r => r.json()).then(setPastAlerts).catch(() => { })}
                     >
-                        🔄 Refresh
+                        <RefreshCcw size={14} /> Refresh
                     </button>
                 </div>
                 <div style={{ overflowX: 'auto' }}>

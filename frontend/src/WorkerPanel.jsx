@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Stethoscope, Search, Cross, Radio, Package, UserX, Send, CheckCircle2 } from 'lucide-react'
 
 const STATUS_STYLE = {
     available: { color: 'var(--accent-green)', bg: 'rgba(16,185,129,0.1)', label: 'Available' },
@@ -7,11 +8,11 @@ const STATUS_STYLE = {
 }
 
 const ROLE_ICON = {
-    'Paramedic': '🩺',
-    'Search & Rescue': '🔦',
-    'Medical Officer': '💊',
-    'Field Coordinator': '📡',
-    'Logistics': '📦',
+    'Paramedic': <Stethoscope size={16} />,
+    'Search & Rescue': <Search size={16} />,
+    'Medical Officer': <Cross size={16} />,
+    'Field Coordinator': <Radio size={16} />,
+    'Logistics': <Package size={16} />,
 }
 
 export default function WorkerPanel({ api }) {
@@ -111,13 +112,14 @@ export default function WorkerPanel({ api }) {
                         {filtered.map(w => {
                             const st = STATUS_STYLE[w.status] || STATUS_STYLE.offline
                             return (
-                                <tr key={w.id}>
+                                <tr>
                                     <td>
-                                        <div style={{ fontWeight: 600 }}>
-                                            {ROLE_ICON[w.role] || '👤'} {w.name}
+                                        <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <span style={{ color: 'var(--text-muted)' }}>{ROLE_ICON[w.role] || <UserX size={16} />}</span>
+                                            {w.name}
                                         </div>
                                     </td>
-                                    <td style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{w.role}</td>
+                                    <td style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{w.role}</td>
                                     <td style={{ color: 'var(--text-secondary)' }}>{w.county_name || '—'}</td>
                                     <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                                         {w.phone}
@@ -137,8 +139,9 @@ export default function WorkerPanel({ api }) {
                                             className="btn btn-primary btn-sm"
                                             disabled={w.status === 'deployed' || disasters.length === 0}
                                             onClick={() => { setModal(w); setDispDisId('') }}
+                                            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                                         >
-                                            {w.status === 'deployed' ? '⚡ Deployed' : '🚀 Dispatch'}
+                                            {w.status === 'deployed' ? <><CheckCircle2 size={14} /> Deployed</> : <><Send size={14} /> Dispatch</>}
                                         </button>
                                     </td>
                                 </tr>
@@ -148,58 +151,60 @@ export default function WorkerPanel({ api }) {
                 </table>
                 {filtered.length === 0 && (
                     <div className="empty-state">
-                        <div className="icon">👷</div>
+                        <div className="icon" style={{ marginBottom: 16 }}><UserX size={48} color="rgba(255,255,255,0.1)" /></div>
                         <p>No workers match your search</p>
                     </div>
                 )}
             </div>
 
             {/* Dispatch modal */}
-            {modal && (
-                <div style={{
-                    position: 'fixed', inset: 0,
-                    background: 'rgba(0,0,0,0.6)',
-                    backdropFilter: 'blur(4px)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    zIndex: 9000,
-                }}>
-                    <div className="card" style={{ width: 420, padding: 28 }}>
-                        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>
-                            🚀 Dispatch {modal.name}
-                        </div>
-                        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>
-                            {modal.role} · {modal.county_name}
-                        </div>
+            {
+                modal && (
+                    <div style={{
+                        position: 'fixed', inset: 0,
+                        background: 'rgba(0,0,0,0.6)',
+                        backdropFilter: 'blur(4px)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        zIndex: 9000,
+                    }}>
+                        <div className="card" style={{ width: 420, padding: 28 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <Send size={18} color="var(--accent-primary)" /> Dispatch {modal.name}
+                            </div>
+                            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>
+                                {modal.role} · {modal.county_name}
+                            </div>
 
-                        <div className="form-group">
-                            <label>Select Disaster</label>
-                            <select
-                                className="form-control"
-                                value={dispDisId}
-                                onChange={e => setDispDisId(e.target.value)}
-                            >
-                                <option value="">— Choose disaster —</option>
-                                {disasters.map(d => (
-                                    <option key={d.id} value={d.id}>
-                                        {d.type} — {d.location} ({d.severity})
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                            <div className="form-group">
+                                <label>Select Disaster</label>
+                                <select
+                                    className="form-control"
+                                    value={dispDisId}
+                                    onChange={e => setDispDisId(e.target.value)}
+                                >
+                                    <option value="">— Choose disaster —</option>
+                                    {disasters.map(d => (
+                                        <option key={d.id} value={d.id}>
+                                            {d.type} — {d.location} ({d.severity})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
 
-                        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                            <button className="btn btn-primary" style={{ flex: 1 }} onClick={dispatch} disabled={!dispDisId}>
-                                Confirm Dispatch
-                            </button>
-                            <button className="btn btn-danger" onClick={() => setModal(null)}>
-                                Cancel
-                            </button>
+                            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                                <button className="btn btn-primary" style={{ flex: 1 }} onClick={dispatch} disabled={!dispDisId}>
+                                    Confirm Dispatch
+                                </button>
+                                <button className="btn btn-danger" onClick={() => setModal(null)}>
+                                    Cancel
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {toast && <div className={`toast ${toast.type}`}>{toast.msg}</div>}
-        </div>
+        </div >
     )
 }

@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import { Map, BarChart2, Users, Bell, FileText, ShieldAlert, Activity, HardHat } from 'lucide-react'
+import { Map as MapIcon, BarChart2, Users, Bell, FileText, Radar, Activity, HardHat } from 'lucide-react'
 import MapView from './MapView'
 import RiskPanel from './RiskPanel'
 import WorkerPanel from './WorkerPanel'
 import AlertConsole from './AlertConsole'
 import AIReport from './AIReport'
+import MotionBackground from './MotionBackground'
 import './index.css'
 
 const API = 'http://localhost:8000'
 
 const NAV = [
-  { path: '/', icon: Map, label: 'Live Map' },
+  { path: '/', icon: MapIcon, label: 'Live Map' },
   { path: '/risk', icon: BarChart2, label: 'Risk Scores' },
   { path: '/workers', icon: Users, label: 'Workers' },
   { path: '/alerts', icon: Bell, label: 'Alert Console' },
@@ -22,7 +23,7 @@ function Sidebar({ stats }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
-        <div className="logo-icon"><ShieldAlert size={20} color="white" /></div>
+        <div className="logo-icon"><Radar size={20} color="white" /></div>
         <div>
           <div className="logo-text">KDMS</div>
           <div className="logo-sub">Kenya Disaster Mgmt</div>
@@ -110,6 +111,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="app-shell">
+        <MotionBackground />
         <Sidebar stats={stats} />
         <div className="main-content">
           <Topbar stats={stats} />

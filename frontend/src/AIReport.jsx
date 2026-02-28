@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import Markdown from 'react-markdown'
+import { FileText, Cpu, Activity, Info, AlertTriangle, Droplets, Flame, Sun, Mountain, Clock, Lightbulb } from 'lucide-react'
 
 export default function AIReport({ api }) {
     const [report, setReport] = useState(null)
@@ -41,8 +42,8 @@ export default function AIReport({ api }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
                 <div style={{ display: 'flex', gap: 4 }}>
                     {[
-                        { key: 'sitRep', label: '📄 Situation Report' },
-                        { key: 'predict', label: '🔮 72hr Predictions' },
+                        { key: 'sitRep', label: <><FileText size={16} /> Situation Report</> },
+                        { key: 'predict', label: <><Activity size={16} /> 72hr Predictions</> },
                     ].map(t => (
                         <button
                             key={t.key}
@@ -54,7 +55,7 @@ export default function AIReport({ api }) {
                                 borderRadius: 8,
                             }}
                         >
-                            {t.label}
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{t.label}</span>
                         </button>
                     ))}
                 </div>
@@ -71,7 +72,7 @@ export default function AIReport({ api }) {
                         onClick={loadAll}
                         disabled={loading}
                     >
-                        {loading ? '⏳ Generating…' : '🤖 Refresh with AI'}
+                        {loading ? '⏳ Generating…' : <><Cpu size={16} /> Refresh with AI</>}
                     </button>
                 </div>
             </div>
@@ -109,7 +110,7 @@ export default function AIReport({ api }) {
                             <Markdown>{report}</Markdown>
                         ) : (
                             <div className="empty-state">
-                                <div className="icon">🤖</div>
+                                <div className="icon"><Cpu size={48} color="rgba(255,255,255,0.1)" /></div>
                                 <p>Click "Refresh with AI" to generate a national situation report</p>
                             </div>
                         )}
@@ -121,7 +122,7 @@ export default function AIReport({ api }) {
                     {predictions.length === 0 ? (
                         <div className="card">
                             <div className="empty-state">
-                                <div className="icon">🔮</div>
+                                <div className="icon"><Info size={48} color="rgba(255,255,255,0.1)" /></div>
                                 <p>No active 72-hour threat predictions</p>
                             </div>
                         </div>
@@ -140,22 +141,23 @@ export default function AIReport({ api }) {
                                             {p.probability}
                                         </span>
                                     </div>
-                                    <div style={{ fontSize: 22, marginBottom: 6 }}>
-                                        {p.threat === 'Flood' ? '🌊' :
-                                            p.threat === 'Wildfire' ? '🔥' :
-                                                p.threat === 'Drought' ? '☀️' :
-                                                    p.threat === 'Landslide' ? '⛰️' : '⚠️'} {p.threat}
+                                    <div style={{ fontSize: 18, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        {p.threat === 'Flood' ? <Droplets size={20} /> :
+                                            p.threat === 'Wildfire' ? <Flame size={20} /> :
+                                                p.threat === 'Drought' ? <Sun size={20} /> :
+                                                    p.threat === 'Landslide' ? <Mountain size={20} /> : <AlertTriangle size={20} />} <span style={{ fontSize: 22 }}>{p.threat}</span>
                                     </div>
-                                    <div style={{ fontSize: 12, color: 'var(--accent-amber)', marginBottom: 8 }}>
-                                        ⏰ {p.estimated_time}
+                                    <div style={{ fontSize: 12, color: 'var(--accent-amber)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <Clock size={14} /> {p.estimated_time}
                                     </div>
                                     <div style={{
                                         fontSize: 12, color: 'var(--text-secondary)',
                                         background: 'rgba(255,255,255,0.04)',
                                         borderRadius: 6, padding: '8px 10px',
-                                        lineHeight: 1.5,
+                                        lineHeight: 1.5, display: 'flex', gap: 8, alignItems: 'flex-start'
                                     }}>
-                                        💡 {p.recommended_action}
+                                        <Lightbulb size={16} color="var(--accent-primary)" style={{ flexShrink: 0, marginTop: 2 }} />
+                                        <span>{p.recommended_action}</span>
                                     </div>
                                 </div>
                             ))}

@@ -1,0 +1,11 @@
+{
+    "sqltools.useNodeRuntime": true,
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "driver": "SQLite",
+            "name": "localdb",
+            "database": "${workspaceFolder:MLH}/KDMS/backend/kdms.db"
+        }
+    ]
+}
